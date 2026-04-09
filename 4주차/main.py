@@ -2,8 +2,6 @@ import time
 import json
 import threading
 import random
-# 시간을 더 정밀하게 다루기 위한 기본 도구(물론 허용됩니다!)
-import datetime
 
 
 class DummySensor:
