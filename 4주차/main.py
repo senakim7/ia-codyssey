@@ -2,6 +2,9 @@ import time
 import json
 import threading
 import random
+import os  # [추가] 시스템 기본 기능
+import platform  # [추가] 시스템 종류 확인
+import subprocess  # [추가] 시스템 명령어 실행 (wmic)
 
 
 class DummySensor:
@@ -18,6 +21,7 @@ class DummySensor:
 
 class MissionComputer:
     def __init__(self):
+        # [기존 기능] 환경 변수 및 화성 시간 측정용
         self.env_values = {
             'mars_base_internal_temperature': 0.0,
             'mars_base_external_temperature': 0.0,
@@ -29,34 +33,107 @@ class MissionComputer:
         self.ds = DummySensor()
         self.is_running = True
         self.history_data = []
-
-        # [추가된 부분] 컴퓨터에 전원이 들어온 '지구 시간'을 찰칵! 사진 찍듯 기록해 둡니다.
-        # 이것이 화성 임무의 시작 시간(Sol 0)이 됩니다.
         self.mission_start_time = time.time()
 
+        # [추가 기능] 시스템 정보 설정을 위한 setting.txt 읽어오기
+        self.settings = self._load_settings()
+
+    # ---------------------------------------------------------
+    # [추가된 구역] 미션 컴퓨터 시스템 진단 메서드들
+    # ---------------------------------------------------------
+    def _load_settings(self):
+        settings = []
+        try:
+            with open('setting.txt', 'r', encoding='utf-8') as f:
+                for line in f:
+                    clean_line = line.strip()
+                    if clean_line:
+                        settings.append(clean_line)
+        except FileNotFoundError:
+            # 파일이 없어도 정상 작동하도록 예외처리
+            pass
+        return settings
+
+    def _filter_data(self, data_dict):
+        if not self.settings:
+            return data_dict
+        return {k: v for k, v in data_dict.items() if k in self.settings}
+
+    def get_mission_computer_info(self):
+        info = {}
+        try:
+            info['os'] = platform.system()
+            info['os_version'] = platform.version()
+            info['cpu_type'] = platform.processor()
+            info['cpu_cores'] = os.cpu_count()
+
+            memory_size = 'Unknown'
+            if info['os'] == 'Windows':
+                result = subprocess.check_output(['wmic', 'computersystem', 'get', 'TotalPhysicalMemory']).decode()
+                mem_bytes = [line.strip() for line in result.split('\n') if line.strip().isdigit()]
+                if mem_bytes:
+                    memory_size = f'{round(int(mem_bytes[0]) / (1024 ** 3), 2)} GB'
+            elif info['os'] == 'Linux':
+                with open('/proc/meminfo', 'r') as f:
+                    for line in f:
+                        if 'MemTotal' in line:
+                            mem_kb = int(line.split()[1])
+                            memory_size = f'{round(mem_kb / (1024 ** 2), 2)} GB'
+                            break
+            info['memory_size'] = memory_size
+        except Exception as e:
+            pass
+
+        filtered_info = self._filter_data(info)
+        return json.dumps(filtered_info, indent=4, ensure_ascii=False)
+
+    def get_mission_computer_load(self):
+        load = {}
+        try:
+            os_system = platform.system()
+            cpu_usage = 'Unknown'
+            memory_usage = 'Unknown'
+
+            if os_system == 'Windows':
+                cpu_result = subprocess.check_output(['wmic', 'cpu', 'get', 'loadpercentage']).decode()
+                cpu_val = [line.strip() for line in cpu_result.split('\n') if line.strip().isdigit()]
+                if cpu_val:
+                    cpu_usage = f'{cpu_val[0]}%'
+
+                mem_result = subprocess.check_output(
+                    ['wmic', 'os', 'get', 'FreePhysicalMemory,TotalVisibleMemorySize', '/Value']).decode()
+                mem_info = {}
+                for line in mem_result.split('\n'):
+                    if '=' in line:
+                        key, val = line.strip().split('=')
+                        mem_info[key] = int(val)
+
+                if 'TotalVisibleMemorySize' in mem_info and 'FreePhysicalMemory' in mem_info:
+                    total = mem_info['TotalVisibleMemorySize']
+                    free = mem_info['FreePhysicalMemory']
+                    used = total - free
+                    memory_usage = f'{round((used / total) * 100, 1)}%'
+
+            load['cpu_usage'] = cpu_usage
+            load['memory_usage'] = memory_usage
+        except Exception as e:
+            pass
+
+        filtered_load = self._filter_data(load)
+        return json.dumps(filtered_load, indent=4, ensure_ascii=False)
+
+    # ---------------------------------------------------------
+    # [기존 구역] 화성 시간 및 센서 데이터 처리 메서드들
+    # ---------------------------------------------------------
     def get_mars_time(self):
-        # [핵심 수학 원리]
-        # 지구의 1일은 86,400초입니다. (24시간 * 60분 * 60초)
-        # 화성의 1일(Sol)은 약 88,775초입니다.
-        # 즉, 화성의 시간은 지구보다 1.02749배 천천히 흐릅니다. (88775 / 86400)
-
-        # 1. 전원이 켜진 후 '지구 시간'으로 몇 초가 지났는지 계산합니다.
         earth_elapsed = time.time() - self.mission_start_time
-
-        # 2. 이 시간을 1.02749로 나누면 '화성 시간'으로 몇 초가 지났는지 알 수 있습니다.
         mars_elapsed = earth_elapsed / 1.02749
-
-        # 3. 화성 시간 초(second)를 다시 일(Sol), 시간, 분, 초로 예쁘게 나눕니다.
-        # // 는 몫을 구하는 기호, % 는 나머지를 구하는 기호입니다!
         mars_sols = int(mars_elapsed // 86400)
         leftover = mars_elapsed % 86400
         mars_hours = int(leftover // 3600)
         leftover = leftover % 3600
         mars_minutes = int(leftover // 60)
         mars_seconds = int(leftover % 60)
-
-        # f"..." 는 문자를 예쁘게 조립해 주는 기능입니다.
-        # :02d 는 숫자가 한 자리여도 '01', '09'처럼 두 자리로 보여달라는 뜻이에요.
         return f"Sol {mars_sols} - {mars_hours:02d}:{mars_minutes:02d}:{mars_seconds:02d}"
 
     def get_sensor_data(self):
@@ -65,7 +142,6 @@ class MissionComputer:
             self.env_values.update(new_data)
             self.history_data.append(new_data)
 
-            # [추가된 부분] 방금 만든 화성 시계를 출력합니다!
             print(f'\n====================================')
             print(f'   현재 화성 기지 시간: {self.get_mars_time()}')
             print(f'====================================')
@@ -91,8 +167,20 @@ class MissionComputer:
 
 
 if __name__ == '__main__':
+    # 인스턴스화
     RunComputer = MissionComputer()
 
+    # --- [과제 요구사항] 시스템 정보 출력 확인 ---
+    print('>>> 시스템 정보 스캔 시작...\n')
+    print('--- 미션 컴퓨터 시스템 기본 정보 ---')
+    print(RunComputer.get_mission_computer_info())
+
+    print('\n--- 미션 컴퓨터 실시간 부하 상태 ---')
+    print(RunComputer.get_mission_computer_load())
+    print('\n>>> 센서 데이터 모니터링을 시작합니다...\n')
+    # -----------------------------------------------
+
+    # 기존 스레드(센서 데이터 가져오기) 실행
     sensor_thread = threading.Thread(target=RunComputer.get_sensor_data)
     sensor_thread.daemon = True
     sensor_thread.start()
@@ -102,9 +190,9 @@ if __name__ == '__main__':
             user_input = input('특정 키(S)를 입력하면 시스템이 정지됩니다.\n')
             if user_input.lower() == 's':
                 RunComputer.is_running = False
-                print('Sytem stoped....')
+                print('System stopped....')
                 break
         except KeyboardInterrupt:
             RunComputer.is_running = False
-            print('Sytem stoped....')
+            print('System stopped....')
             break
