@@ -47,6 +47,3 @@
 # 1. Repository Clone
 git clone [https://github.com/본인아이디/codissey-archive.git](https://github.com/본인아이디/codissey-archive.git)
 cd codissey-archive
-
-# 2. Install Dependencies (10~11주차 과제 실행 시 필수)
-pip install pymysql
